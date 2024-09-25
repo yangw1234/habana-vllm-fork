@@ -172,11 +172,15 @@ def generate_prompt_buckets(bs_bucket_config,
 def generate_decode_buckets(bs_bucket_config, blocks_bucket_config,
                             max_blocks):
     buckets = []
-    for bs in warmup_range(bs_bucket_config):
-        for blocks in warmup_range(blocks_bucket_config):
+    bs_buckets = warmup_range(bs_bucket_config)
+    block_buckets = warmup_range(blocks_bucket_config)
+    bmin, bstep, bmax = blocks_bucket_config
+    last_bucket = round_up(max_blocks, bstep)
+    for bs in bs_buckets:
+        for blocks in block_buckets:
             if blocks < bs:
                 continue
-            if blocks > max_blocks:
+            if blocks > last_bucket:
                 break
             buckets.append((bs, blocks))
     return list(sorted(buckets, key=lambda b: (b[0] * b[1], b[1], b[0])))
