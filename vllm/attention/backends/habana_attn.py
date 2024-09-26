@@ -206,6 +206,7 @@ class HabanaAttentionImpl(AttentionImpl, torch.nn.Module):
                 matmul_qk_op=self.matmul_qk,
                 softmax_op=self.softmax,
                 matmul_av_op=self.matmul_av,
+                valid_seq_lengths=attn_metadata.seq_lens_tensor,
             )
             output = out.reshape(batch_size, seq_len, hidden_size)
         else:
