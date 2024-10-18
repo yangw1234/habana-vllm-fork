@@ -1981,13 +1981,14 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 **execute_model_kwargs,
                 selected_token_indices=sampling_metadata.selected_token_indices
             )
-        #htorch.hpu.synchronize()
-        elapase = time.perf_counter() - start
-        
-        bs = hidden_states.shape[0]
-        if bs not in self.fwd_time:
-            self.fwd_time[bs] = []
-        self.fwd_time[bs].append(elapase)
+        if not is_prompt:
+            htorch.hpu.synchronize()
+            elapase = time.perf_counter() - start
+            
+            bs = hidden_states.shape[0]
+            if bs not in self.fwd_time:
+                self.fwd_time[bs] = []
+            self.fwd_time[bs].append(elapase)
 
         if self.lora_config:
             LoraMask.setLoraMask(
