@@ -216,7 +216,7 @@ def align_workers(value, op):
 
 
 def setup_profiler():
-    schedule = torch.profiler.schedule(wait=0, warmup=2, active=1, repeat=1)
+    schedule = torch.profiler.schedule(wait=0, warmup=0, active=1, repeat=1)
     DEVICE = 'hpu'
     activities = [torch.profiler.ProfilerActivity.CPU]
     activities.extend([torch.profiler.ProfilerActivity.HPU] if DEVICE ==
@@ -231,7 +231,7 @@ def setup_profiler():
         on_trace_ready=torch.profiler.tensorboard_trace_handler('.',
                                                                 use_gzip=True),
         record_shapes=False,
-        with_stack=True)
+        with_stack=False)
     return profiler
 
 
@@ -1023,9 +1023,11 @@ class HabanaModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         block_mapping = pad_list(block_mapping, block_bucket_size, 0)
         block_usage = pad_list(block_usage, block_bucket_size, 0)
 
+        # print("block_list", block_list)
         block_list = torch.tensor(block_list,
                                   dtype=torch.int,
                                   device=self.device)
+        # print("block_mapping", block_mapping)
         block_mapping = torch.tensor(block_mapping,
                                      dtype=torch.int,
                                      device=self.device)

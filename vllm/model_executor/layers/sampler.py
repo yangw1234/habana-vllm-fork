@@ -131,6 +131,7 @@ class Sampler(nn.Module):
         logits.div_(sampling_tensors.temperatures.unsqueeze(dim=1))
 
         if do_top_p_top_k:
+            # raise ValueError("Triton kernel does not support top-p and top-k")
             if self._scalar_p_and_k:
                 logits = self._apply_top_k_top_p_opt(logits,
                                                      self._top_p_scalar,
@@ -655,6 +656,7 @@ def _sample_with_torch(
         sample_metadata[sampling_type] = (seq_group_id, seq_groups)
         long_sample_indices = sample_indices.long()
         if sampling_type == SamplingType.GREEDY:
+            raise ValueError("Greedy sampling is not supported with torch.")
             greedy_samples = torch.argmax(logprobs[long_sample_indices],
                                           dim=-1)
 

@@ -58,4 +58,6 @@ class VLLMKVCache(torch.nn.Module):
         return cache
 
     def fetch_from_cache(self, cache, blocks):
-        return cache.index_select(0, blocks)
+        # return cache.index_select(0, blocks)
+        # return cache[:len(blocks)]
+        return cache

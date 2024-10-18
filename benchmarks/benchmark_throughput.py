@@ -106,6 +106,11 @@ def run_vllm(
         max_num_batched_tokens=max_num_batched_tokens,
         distributed_executor_backend=distributed_executor_backend,
         load_format=load_format,
+        num_lookahead_slots=1,
+        use_v2_block_manager=True,
+        enable_delayed_sampling=True,
+        block_size=2048,
+        num_gpu_blocks_override=128,
     )
 
     # Add the requests to the engine.
@@ -120,12 +125,30 @@ def run_vllm(
                 top_p=1.0,
                 use_beam_search=use_beam_search,
                 ignore_eos=True,
-                max_tokens=output_len,
+                max_tokens=1024,
             ))
 
+    print(sampling_params[0].sampling_type)
     start = time.perf_counter()
-    llm.generate(prompts, sampling_params, use_tqdm=True)
+    llm.generate(prompts, sampling_params=sampling_params, use_tqdm=True)
     end = time.perf_counter()
+
+    # from vllm.utils import Device
+
+    # print(llm.llm_engine.scheduler[0].block_manager.block_allocator._allocators[Device.GPU]._free_block_indices)
+
+    # from vllm.worker.habana_model_runner import setup_profiler
+    # profiler = setup_profiler()
+    # profiler.start()
+    start = time.perf_counter()
+    llm.generate(prompts, sampling_params=sampling_params, use_tqdm=True)
+    end = time.perf_counter()
+    # print("finished generate")
+    # profiler.step()
+    # print("step profiler")
+    # profiler.stop()
+
+
     return end - start
 
 

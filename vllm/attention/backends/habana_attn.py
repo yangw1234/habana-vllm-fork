@@ -211,18 +211,34 @@ class HabanaAttentionImpl(AttentionImpl, torch.nn.Module):
             output = out.reshape(batch_size, seq_len, hidden_size)
         else:
             # Decoding run.
-            output = HabanaPagedAttention.forward_decode(
-                query=query,
-                key_cache=key_cache,
-                value_cache=value_cache,
-                block_list=attn_metadata.block_list,
-                block_mapping=attn_metadata.block_mapping,
-                block_bias=attn_metadata.attn_bias,
+            # output = HabanaPagedAttention.forward_decode(
+            #     query=query,
+            #     key_cache=key_cache,
+            #     value_cache=value_cache,
+            #     block_list=attn_metadata.block_list,
+            #     block_mapping=attn_metadata.block_mapping,
+            #     block_bias=attn_metadata.attn_bias,
+            #     scale=self.scale,
+            #     matmul_qk_op=self.matmul_qk,
+            #     matmul_av_op=self.matmul_av,
+            #     keys_fetch_func=self.k_cache.fetch_from_cache,
+            #     values_fetch_func=self.v_cache.fetch_from_cache)
+
+            key = self.k_cache.fetch_from_cache(key_cache, attn_metadata.block_list)
+            value = self.v_cache.fetch_from_cache(value_cache, attn_metadata.block_list)
+
+            output = ops.prompt_attention(
+                query.view((batch_size, 1, self.num_heads, self.head_size)),
+                key.view((batch_size, -1, self.num_kv_heads, self.head_size)),
+                value.view((batch_size, -1, self.num_kv_heads, self.head_size)),
+                attn_bias=None,
+                p=0.0,
                 scale=self.scale,
                 matmul_qk_op=self.matmul_qk,
+                softmax_op=self.softmax,
                 matmul_av_op=self.matmul_av,
-                keys_fetch_func=self.k_cache.fetch_from_cache,
-                values_fetch_func=self.v_cache.fetch_from_cache)
+                valid_seq_lengths=attn_metadata.seq_lens_tensor,
+            )
         # Reshape the output tensor.
         return output.view(batch_size, seq_len, hidden_size)
 
