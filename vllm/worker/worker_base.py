@@ -183,7 +183,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     first_token = {}
     next_token = {}
     
-    def __del__(self):
+    def print_perf(self):
         try:
             first_token_statistic = [f"First Token: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.first_token.items()]  # noqa: E501
         except:
@@ -194,6 +194,10 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             next_token_statistic = [] 
         print(first_token_statistic)
         print(next_token_statistic)
+    
+    def reset_perf(self):
+        self.first_token = {}
+        self.next_token = {}
 
     @property
     @abstractmethod

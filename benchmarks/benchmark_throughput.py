@@ -160,6 +160,11 @@ def run_vllm(
         out_num_tokens = sum(output_len
                             for _, prompt_len, output_len in requests)
         
+        llm.llm_engine.model_executor.driver_worker.print_perf()
+        llm.llm_engine.model_executor.driver_worker.reset_perf()
+        llm.llm_engine.model_executor.driver_worker.model_runner.print_perf()
+        llm.llm_engine.model_executor.driver_worker.model_runner.reset_perf()
+        
         print("====== Warmup ======")
         print(f"Throughput: {len(requests) / elapsed_time:.2f} requests/s, ")
         print(f"Total Throughput: {total_num_tokens / elapsed_time:.2f} tokens/s")
