@@ -2052,13 +2052,23 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 finalize_calibration)
             finalize_calibration(self.model.model)
             self._is_inc_finalized = True
-
-    def __del__(self):
+    
+    def print_perf(self):
         try:
             next_token_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
         except:
             next_token_statistic = []
         print(next_token_statistic)
+
+    def reset_perf(self):
+        self.fwd_time = {}
+
+    def __del__(self):
+        # try:
+        #     next_token_statistic = [f"model fwd: bs == {bs}, avg_time is {sum(v)/len(v) * 1000} msecs, counts is {len(v)}\n" for bs, v in self.fwd_time.items()]  # noqa: E501
+        # except:
+        #     next_token_statistic = []
+        # print(next_token_statistic)
         try:
             self.shutdown_inc()
         except:
