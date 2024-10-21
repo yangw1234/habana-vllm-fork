@@ -1981,14 +1981,6 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                 **execute_model_kwargs,
                 selected_token_indices=sampling_metadata.selected_token_indices
             )
-        if not is_prompt:
-            htorch.hpu.synchronize()
-            elapase = time.perf_counter() - start
-            
-            bs = hidden_states.shape[0]
-            if bs not in self.fwd_time:
-                self.fwd_time[bs] = []
-            self.fwd_time[bs].append(elapase)
 
         if self.lora_config:
             LoraMask.setLoraMask(
@@ -2024,6 +2016,14 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
             )
         output.outputs = output.outputs[:real_batch_size]
         htorch.core.mark_step()
+        if not is_prompt:
+            htorch.hpu.synchronize()
+            elapase = time.perf_counter() - start
+
+            bs = hidden_states.shape[0]
+            if bs not in self.fwd_time:
+                self.fwd_time[bs] = []
+            self.fwd_time[bs].append(elapase)
 
         if self.is_driver_worker and self.profiler.enabled:
             # Stop recording 'execute_model' event
