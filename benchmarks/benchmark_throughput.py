@@ -115,6 +115,8 @@ def run_vllm(
         num_scheduler_steps=num_scheduler_steps,
         use_v2_block_manager=use_v2_block_manager,
         disable_async_output_proc=disable_async_output_proc,
+        block_size=2048,
+        num_gpu_blocks_override=256,
     )
 
     # Add the requests to the engine.
@@ -132,7 +134,7 @@ def run_vllm(
 
     use_beam_search = False
 
-    for i in range(3):
+    for i in range(2):
         if not use_beam_search:
             start = time.perf_counter()
             llm.generate(prompts, sampling_params, use_tqdm=True)

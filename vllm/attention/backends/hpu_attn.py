@@ -215,19 +215,80 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             output = out.reshape(batch_size, seq_len, hidden_size)
         else:
             # Decoding run.
-            output = HPUPagedAttention.forward_decode(
-                query=query,
-                key_cache=key_cache,
-                value_cache=value_cache,
-                block_list=attn_metadata.block_list,
-                block_mapping=attn_metadata.block_mapping,
-                block_bias=attn_metadata.attn_bias,
-                block_scales=attn_metadata.block_scales,
-                scale=self.scale,
-                matmul_qk_op=self.matmul_qk,
-                matmul_av_op=self.matmul_av,
-                keys_fetch_func=self.k_cache.fetch_from_cache,
-                values_fetch_func=self.v_cache.fetch_from_cache)
+            
+            ########## simulate static cache with fused sdpa ##########
+            # Using command:
+            # VLLM_PROMPT_BS_BUCKET_MIN=1 VLLM_PROMPT_BS_BUCKET_STEP=32 VLLM_PROMPT_BS_BUCKET_MAX=128 VLLM_PROMPT_SEQ_BUCKET_MIN=1 VLLM_PROMPT_SEQ_BUCKET_STEP=128 VLLM_PROMPT_SEQ_BUCKET_MAX=2048 VLLM_DECODE_BLOCK_BUCKET_MIN=128 VLLM_DECODE_BLOCK_BUCKET_STEP=128 VLLM_DECODE_BLOCK_BUCKET_MAX=128 VLLM_SKIP_WARMUP=true python benchmarks/benchmark_throughput.py --model /mnt/weka/data/pytorch/llama3/Meta-Llama-3-8B-Instruct --device hpu --backend vllm --num-prompts 128 --input_len 1024 --output_len 1024 --dtype bfloat16 --gpu-memory-util 0.9 --use-v2-block-manager --max-model-len 4096
+            #
+            # simulate a static cache
+            key = key_cache[:attn_metadata.block_list.shape[0]]
+            value = value_cache[:attn_metadata.block_list.shape[0]]
+
+            # currently this is not the correct layout
+            # need to change cache layout to be able to use this
+            # might affect the performance of reshape_and_store
+            query_shape = (batch_size, self.num_heads, 1, self.head_size)
+            kv_shape = (batch_size, self.num_kv_heads, 2048,
+                        self.head_size)
+            query = query.view(query_shape)
+            key = key.view(kv_shape)
+            value = value.view(kv_shape)
+
+            query_heads = query.size(1)
+            kv_heads = key.size(1)
+
+            from vllm_hpu_extension.ops import FusedSDPA
+            from vllm_hpu_extension.ops import repeat_kv
+
+            # OH doesn't use repeat_kv in the FuseSDPA case
+            #
+            # if query_heads != kv_heads:
+            #     key = repeat_kv(key, int(query_heads // kv_heads))
+            #     value = repeat_kv(value, int(query_heads // kv_heads))
+            output = FusedSDPA.apply(query, key, value, None, 0.0, False,
+                                           None, "None", False,
+                                           None, 'None')
+            output = output.transpose(1, 2)
+            ################################################################
+
+            ########## simulate static cache with flat_pa (without gather) ##########
+            # Decoding run.
+
+            # def fetch_from_cache(cache, blocks):
+            #     return cache[:blocks.shape[0]]
+
+            # output = HPUPagedAttention.forward_decode(
+            #     query=query,
+            #     key_cache=key_cache,
+            #     value_cache=value_cache,
+            #     block_list=attn_metadata.block_list,
+            #     block_mapping=attn_metadata.block_mapping,
+            #     block_bias=attn_metadata.attn_bias,
+            #     block_scales=attn_metadata.block_scales,
+            #     scale=self.scale,
+            #     matmul_qk_op=self.matmul_qk,
+            #     matmul_av_op=self.matmul_av,
+            #     keys_fetch_func=fetch_from_cache,
+            #     values_fetch_func=fetch_from_cache)
+            ################################################################
+
+
+            ########## original flat_pa ##########
+            # Decoding run.
+            # output = HPUPagedAttention.forward_decode(
+            #     query=query,
+            #     key_cache=key_cache,
+            #     value_cache=value_cache,
+            #     block_list=attn_metadata.block_list,
+            #     block_mapping=attn_metadata.block_mapping,
+            #     block_bias=attn_metadata.attn_bias,
+            #     block_scales=attn_metadata.block_scales,
+            #     scale=self.scale,
+            #     matmul_qk_op=self.matmul_qk,
+            #     matmul_av_op=self.matmul_av,
+            #     keys_fetch_func=self.k_cache.fetch_from_cache,
+            #     values_fetch_func=self.v_cache.fetch_from_cache)
+            ################################################################
         # Reshape the output tensor.
         return output.view(batch_size, seq_len, hidden_size)
 
