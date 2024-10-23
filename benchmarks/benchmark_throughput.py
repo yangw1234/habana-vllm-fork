@@ -133,33 +133,40 @@ def run_vllm(
         sampling_params.append(
             SamplingParams(
                 n=n,
-                temperature=1.0,
+                temperature=0.0,
                 top_p=1.0,
                 ignore_eos=True,
                 max_tokens=output_len,
             ))
+    # from vllm.utils import Device
+    # for i in range(5):
+    #     start = time.perf_counter()
+    #     llm.generate(prompts, sampling_params, use_tqdm=True)
+    #     end = time.perf_counter()
+        # print(llm.llm_engine.scheduler[0].block_manager.block_allocator._allocators[Device.GPU]._free_block_indices)
 
     use_beam_search = False
 
-    if not use_beam_search:
-        start = time.perf_counter()
-        llm.generate(prompts, sampling_params, use_tqdm=True)
-        end = time.perf_counter()
-    else:
-        prompts = [prompt for prompt, _, _ in requests]
-        # output_len should be the same for all requests.
-        output_len = requests[0][2]
-        for prompt, input_len, _output_len in requests:
-            assert _output_len == output_len
-        start = time.perf_counter()
-        llm.beam_search(
-            prompts,
-            BeamSearchParams(
-                beam_width=n,
-                max_tokens=output_len,
-                ignore_eos=True,
-            ))
-        end = time.perf_counter()
+    for i in range(3):
+        if not use_beam_search:
+            start = time.perf_counter()
+            llm.generate(prompts, sampling_params, use_tqdm=True)
+            end = time.perf_counter()
+        else:
+            prompts = [prompt for prompt, _, _ in requests]
+            # output_len should be the same for all requests.
+            output_len = requests[0][2]
+            for prompt, input_len, _output_len in requests:
+                assert _output_len == output_len
+            start = time.perf_counter()
+            llm.beam_search(
+                prompts,
+                BeamSearchParams(
+                    beam_width=n,
+                    max_tokens=output_len,
+                    ignore_eos=True,
+                ))
+            end = time.perf_counter()
     return end - start
 
 
