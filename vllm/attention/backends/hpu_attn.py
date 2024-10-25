@@ -215,6 +215,7 @@ class HPUAttentionImpl(AttentionImpl, torch.nn.Module):
             output = out.reshape(batch_size, seq_len, hidden_size)
         else:
             # Decoding run.
+            # print(f"Decoding total blocks: {attn_metadata.block_list.size(0)}")
             output = HPUPagedAttention.forward_decode(
                 query=query,
                 key_cache=key_cache,

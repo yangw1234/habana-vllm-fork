@@ -220,7 +220,7 @@ def align_workers(value, op):
 
 
 def setup_profiler():
-    schedule = torch.profiler.schedule(wait=0, warmup=2, active=1, repeat=1)
+    schedule = torch.profiler.schedule(wait=0, warmup=0, active=1, repeat=0)
     DEVICE = 'hpu'
     activities = [torch.profiler.ProfilerActivity.CPU]
     activities.extend([torch.profiler.ProfilerActivity.HPU] if DEVICE ==
@@ -235,7 +235,7 @@ def setup_profiler():
         on_trace_ready=torch.profiler.tensorboard_trace_handler('.',
                                                                 use_gzip=True),
         record_shapes=False,
-        with_stack=True)
+        with_stack=False)
     return profiler
 
 
@@ -959,13 +959,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                     block_table = block_table[-sliding_window_blocks:]
                 block_tables.append(block_table)
 
-        input_tokens = torch.tensor(input_tokens,
-                                    dtype=torch.long,
-                                    device=self.device)
-        input_positions = torch.tensor(input_positions,
-                                       dtype=torch.long,
-                                       device=self.device)
-
         num_decode_tokens = sum(seq_lens)
 
         block_list = list(itertools.chain(*block_tables))
@@ -992,6 +985,13 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         block_list = pad_list(block_list, block_bucket_size, _PAD_SLOT_ID)
         block_mapping = pad_list(block_mapping, block_bucket_size, 0)
         block_usage = pad_list(block_usage, block_bucket_size, 0)
+
+        input_tokens = torch.tensor(input_tokens,
+                                    dtype=torch.long,
+                                    device=self.device)
+        input_positions = torch.tensor(input_positions,
+                                       dtype=torch.long,
+                                       device=self.device)
 
         block_list = torch.tensor(block_list,
                                   dtype=torch.int,
@@ -1908,7 +1908,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
         if htorch.utils.internal.is_lazy():
             execute_model_kwargs.update({"bypass_hpu_graphs": not use_graphs})
 
-        htorch.core.mark_step()
+        # htorch.core.mark_step()
         if self.is_driver_worker:
             model_event_name = ("model_"
                                 f"{'prompt' if is_prompt else 'decode'}_"

@@ -875,11 +875,15 @@ class LLM:
             )
 
         # Run the engine.
+        import time
         outputs: List[Union[RequestOutput, EmbeddingRequestOutput]] = []
         total_in_toks = 0
         total_out_toks = 0
         while self.llm_engine.has_unfinished_requests():
+            st = time.perf_counter()
             step_outputs = self.llm_engine.step()
+            end = time.perf_counter()
+            # print(f"step time: {end - st}")
             for output in step_outputs:
                 if output.finished:
                     outputs.append(output)

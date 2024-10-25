@@ -332,6 +332,7 @@ def calculate_metrics(
             output_len = len(
                 tokenizer(outputs[i].generated_text,
                           add_special_tokens=False).input_ids)
+            print(f"generated_text: {outputs[i].generated_text}")
             actual_output_lens.append(output_len)
             total_input += input_requests[i][1]
             if output_len > 1:

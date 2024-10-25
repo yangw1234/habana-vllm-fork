@@ -349,6 +349,9 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             for o in output:
                 o.model_execute_time = (orig_model_execute_time +
                                         model_execute_time)
+        overall_time = time.perf_counter() - start_time
+        # print(f"Overall time: {overall_time}")
+        # print(f"Model execute time: {model_execute_time}")
 
         # output is List[SamplerOutput]
         return output
