@@ -320,7 +320,7 @@ class HpuModelAdapter():
 
     def forward(self, *args, **kwargs):
         kwargs = kwargs.copy()
-        selected_token_indices = kwargs.pop('selected_token_indices')
+        # selected_token_indices = kwargs.pop('selected_token_indices')
         if 'warmup_mode' in kwargs:
             kwargs.pop('warmup_mode')
         input_ids = kwargs['input_ids']
@@ -330,7 +330,6 @@ class HpuModelAdapter():
         LoraMask.setLoraMask(kwargs.pop('lora_mask'))
         hidden_states = self.model(*args, **kwargs)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        hidden_states = hidden_states.index_select(0, selected_token_indices)
         return hidden_states
 
     def compute_logits(self, *args, **kwargs):
@@ -1099,92 +1098,64 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
             decode_slot_mapping,
             decode_lora_ids,
         ) = self._prepare_decode(decode_reqs)
-        sampling_metadata = SamplingMetadata.prepare(seq_group_metadata_list,
-                                                     seq_lens, query_lens,
-                                                     self.device,
-                                                     self.pin_memory)
 
-        if not self.scheduler_config.chunked_prefill_enabled:
-            assert (len(prefill_reqs) and len(decode_reqs)) == 0
+        def get_sampling_metatdata():
+            sampling_metadata = SamplingMetadata.prepare(seq_group_metadata_list,
+                                                        seq_lens, query_lens,
+                                                        self.device,
+                                                        self.pin_memory)
 
-        num_prefills = len(seq_lens)
-        num_prefill_tokens = len(input_tokens)
+            if not self.scheduler_config.chunked_prefill_enabled:
+                assert (len(prefill_reqs) and len(decode_reqs)) == 0
+
+            num_prefills = len(seq_lens)
+            num_prefill_tokens = len(input_tokens)
+            num_decode_tokens = len(decode_input_tokens)
+
+            # NOTE(kzawora): Here we diverge from GPU code - we don't
+            # support mixed batches, so we either use decode or prefill
+            # inputs, without coalescing.
+            assert (num_prefills == 0 and num_decode_tokens > 0) or (
+                num_prefills > 0
+                and num_decode_tokens == 0), "HPU does not support mixed batches!"
+            if num_decode_tokens > 0:
+                _input_tokens = decode_input_tokens
+            else:
+                _input_tokens = input_tokens
+
+            # FIXME: We need to adjust selected_token_indices to accommodate
+            # for padding
+            max_len = _input_tokens.size(1)
+            paddings = [max_len - s for s in seq_lens]
+            paddings = [0] + paddings[:-1]
+            paddings = list(itertools.accumulate(paddings))
+            paddings_prompt_logprobs = []
+            for i, seq_group_metadata in enumerate(seq_group_metadata_list):
+                if seq_group_metadata.sampling_params.prompt_logprobs is not None \
+                                and seq_group_metadata.is_prompt:
+                    paddings_prompt_logprobs += ([paddings[i]] * seq_lens[i])
+            paddings = torch.tensor(
+                paddings_prompt_logprobs if paddings_prompt_logprobs else paddings,
+                dtype=sampling_metadata.selected_token_indices.dtype,
+                device=sampling_metadata.selected_token_indices.device)
+            sampling_metadata.selected_token_indices.add_(paddings)
+            return sampling_metadata
+
+        attn_metadata = prefill_attn_metadata if \
+            prefill_attn_metadata is not None else decode_attn_metadata
         num_decode_tokens = len(decode_input_tokens)
-
-        # NOTE(kzawora): Here we diverge from GPU code - we don't
-        # support mixed batches, so we either use decode or prefill
-        # inputs, without coalescing.
-        assert (num_prefills == 0 and num_decode_tokens > 0) or (
-            num_prefills > 0
-            and num_decode_tokens == 0), "HPU does not support mixed batches!"
         if num_decode_tokens > 0:
-            input_tokens = decode_input_tokens
+            _input_tokens = decode_input_tokens
             input_positions = decode_input_positions
             slot_mapping = decode_slot_mapping
             lora_index_mapping = decode_lora_index_mapping
             lora_prompt_mapping = decode_lora_prompt_mapping
             lora_requests = decode_lora_requests
             lora_ids = decode_lora_ids
-
-        # FIXME: We need to adjust selected_token_indices to accommodate
-        # for padding
-        max_len = input_tokens.size(1)
-        paddings = [max_len - s for s in seq_lens]
-        paddings = [0] + paddings[:-1]
-        paddings = list(itertools.accumulate(paddings))
-        paddings_prompt_logprobs = []
-        for i, seq_group_metadata in enumerate(seq_group_metadata_list):
-            if seq_group_metadata.sampling_params.prompt_logprobs is not None \
-                              and seq_group_metadata.is_prompt:
-                paddings_prompt_logprobs += ([paddings[i]] * seq_lens[i])
-        paddings = torch.tensor(
-            paddings_prompt_logprobs if paddings_prompt_logprobs else paddings,
-            dtype=sampling_metadata.selected_token_indices.dtype,
-            device=sampling_metadata.selected_token_indices.device)
-        sampling_metadata.selected_token_indices.add_(paddings)
-
-        if self.lora_config:
-            lora_mapping = LoRAMapping(
-                **dict(index_mapping=lora_index_mapping,
-                       prompt_mapping=lora_prompt_mapping,
-                       is_prefill=(num_prefills > 0)))
         else:
-            lora_mapping = None
+            _input_tokens = input_tokens
 
-        if (prefill_attn_metadata is not None
-                and decode_attn_metadata is not None):
-            batch_type = BatchType.MIXED
-            raise NotImplementedError("Mixed batch is not supported on HPU")
-        elif prefill_attn_metadata is not None:
-            batch_type = BatchType.PREFILL
-        else:
-            batch_type = BatchType.DECODE
-
-        metadata_dict = {
-            "input_tokens": input_tokens,
-            "input_positions": input_positions,
-            "selected_token_indices": sampling_metadata.selected_token_indices,
-            "lora_requests": lora_requests,
-            "lora_mapping": lora_mapping,
-            "multi_modal_kwargs": multi_modal_kwargs,
-            "num_prefill_tokens": num_prefill_tokens,
-            "num_decode_tokens": num_decode_tokens,
-            "slot_mapping": slot_mapping,
-            "num_prefills": num_prefills,
-            "batch_type": batch_type,
-            "seq_lens": seq_lens,
-            "query_lens": query_lens
-        }
-        if prefill_attn_metadata is not None:
-            metadata_dict.update(prefill_attn_metadata.asdict_zerocopy())
-        else:
-            assert decode_attn_metadata is not None
-            metadata_dict.update(decode_attn_metadata.asdict_zerocopy())
-
-        attn_metadata = prefill_attn_metadata if \
-            prefill_attn_metadata is not None else decode_attn_metadata
-
-        return self._model_input_cls(input_tokens=input_tokens,
+        return self._model_input_cls(input_tokens=_input_tokens,
                                      seq_lens=seq_lens,
                                      query_lens=query_lens,
                                      input_positions=input_positions,
@@ -1195,7 +1166,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                                      real_batch_size=real_batch_size,
                                      batch_size_padded=batch_size_padded,
                                      lora_ids=lora_ids), \
-                                        sampling_metadata
+                                        get_sampling_metatdata
 
     def _seq_len(self, attn_metadata):
         if attn_metadata.num_prefills != 0:
@@ -1920,9 +1891,9 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
         with self.profiler.record_event('internal', model_event_name):
             hidden_states = self.model.forward(
                 **execute_model_kwargs,
-                selected_token_indices=sampling_metadata.selected_token_indices
             )
-
+        sampling_metadata = sampling_metadata()
+        hidden_states = hidden_states.index_select(0, sampling_metadata.selected_token_indices)
         if self.lora_config:
             LoraMask.setLoraMask(
                 lora_logits_mask.index_select(
@@ -1934,6 +1905,7 @@ class HPUModelRunner(HPUModelRunnerBase[ModelInputForHPUWithSamplingMetadata]):
                              f'{"prompt" if is_prompt else "decode"}_bs'
                              f'{batch_size}_'
                              f'seq{seq_len}')):
+                
             sampling_metadata.selected_token_indices = None
             logits = self.model.compute_logits(hidden_states,
                                                sampling_metadata)
