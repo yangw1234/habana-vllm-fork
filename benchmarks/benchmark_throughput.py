@@ -157,7 +157,7 @@ def run_vllm(
                             n=n,
                             temperature=0.0,
                             ignore_eos=True,
-                            max_tokens=output_len,
+                            max_tokens=4,
                         ))
                 profiler.start()
             start = time.perf_counter()
