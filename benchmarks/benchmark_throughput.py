@@ -140,11 +140,32 @@ def run_vllm(
 
     use_beam_search = False
 
+    from vllm.worker.hpu_model_runner import setup_profiler
+    profiler = setup_profiler()
+    # profiler.start()
+    profiler_step = 3
+
     for i in range(4):
         if not use_beam_search:
+            if i == profiler_step:
+                prompts: List[str] = []
+                sampling_params: List[SamplingParams] = []
+                for prompt, _, output_len in requests:
+                    prompts.append(prompt)
+                    sampling_params.append(
+                        SamplingParams(
+                            n=n,
+                            temperature=0.0,
+                            ignore_eos=True,
+                            max_tokens=output_len,
+                        ))
+                profiler.start()
             start = time.perf_counter()
             llm.generate(prompts, sampling_params, use_tqdm=True)
             end = time.perf_counter()
+            if i == profiler_step:
+                profiler.step()
+                profiler.stop()
         else:
             prompts = [prompt for prompt, _, _ in requests]
             # output_len should be the same for all requests.
