@@ -188,7 +188,10 @@ class SamplingMetadata:
             "SamplingMetadata("
             f"seq_groups={self.seq_groups}, "
             f"selected_token_indices={self.selected_token_indices}, "
-            f"categorized_sample_indices={self.categorized_sample_indices}), ")
+            f"categorized_sample_indices={self.categorized_sample_indices}, "
+            f"num_prompts={self.num_prompts}, "
+            f"skip_sampler_cpu_output={self.skip_sampler_cpu_output}, "
+            f"reuse_sampling_tensors={self.reuse_sampling_tensors})")
 
 
 def _prepare_seq_groups(

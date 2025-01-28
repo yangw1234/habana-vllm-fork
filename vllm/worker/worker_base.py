@@ -321,6 +321,9 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             return None
 
         model_input, worker_input, kwargs = inputs
+        print(f"model_input: {model_input}")
+        print(f"worker_input: {worker_input}")
+        print(f"kwargs: {kwargs}")
         num_steps = worker_input.num_steps
 
         self.execute_worker(worker_input)
@@ -348,6 +351,8 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             num_steps=num_steps,
             **kwargs,
         )
+
+        print(f"output: {output}")
 
         model_execute_time = time.perf_counter() - start_time
         if not get_pp_group().is_last_rank:

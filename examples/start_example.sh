@@ -1,0 +1,1 @@
+VLLM_SKIP_WARMUP=true python offline_inference.py
