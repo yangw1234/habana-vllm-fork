@@ -639,7 +639,7 @@ def initialize_dummy_weights(
     """
     for param in model.state_dict().values():
         if torch.is_floating_point(param):
-            if current_platform.is_tpu() and current_platform.is_hpu():
+            if current_platform.is_tpu() or current_platform.is_hpu():
                 # XLA and HPU device does not support torch.Generator()
                 param.uniform_(low, high)
                 continue
