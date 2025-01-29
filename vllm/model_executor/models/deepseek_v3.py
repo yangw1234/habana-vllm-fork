@@ -89,7 +89,7 @@ class DeepseekV3MLP(nn.Module):
         return x
 
 
-class DeepseekV3MoE(nn.Module):
+class DeepseekV3MoEfused(nn.Module):
 
     def __init__(
         self,
@@ -166,6 +166,197 @@ class DeepseekV3MoE(nn.Module):
                 final_hidden_states)
 
         return final_hidden_states.view(batch_size, seq_len, hidden_dim)
+
+
+def moe_gate_naive(bsz, seq_len,
+                   logits,
+                   e_score_correction_bias,
+                   n_group, topk_group,
+                   n_routed_experts,
+                   top_k,
+                   norm_topk_prob,
+                   routed_scaling_factor):
+
+    scores = logits.sigmoid()
+
+    ### select top-k experts
+    scores_for_choice = scores.view(bsz * seq_len, -1) + e_score_correction_bias.unsqueeze(0)
+    group_scores = (
+        scores_for_choice.view(bsz * seq_len, n_group, -1).topk(2, dim=-1)[0].sum(dim = -1)
+    )  # [n, n_group]
+    group_idx = torch.topk(
+        group_scores, k=topk_group, dim=-1, sorted=False
+    )[
+        1
+    ]  # [n, top_k_group]
+    group_mask = torch.zeros_like(group_scores)  # [n, n_group]
+    group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
+    score_mask = (
+        group_mask.unsqueeze(-1)
+        .expand(
+            bsz * seq_len, n_group, n_routed_experts // n_group
+        )
+        .reshape(bsz * seq_len, -1)
+    )  # [n, e]
+    tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), 0.0)  # [n, e]
+    _, topk_idx = torch.topk(
+        tmp_scores, k=top_k, dim=-1, sorted=False
+    )
+    topk_weight = scores.gather(1, topk_idx)
+
+
+    ### norm gate to sum 1
+    if top_k > 1 and norm_topk_prob:
+        denominator = topk_weight.sum(dim=-1, keepdim=True) + 1e-20
+        topk_weight = topk_weight / denominator
+    topk_weight = topk_weight * routed_scaling_factor # must multiply the scaling factor
+
+    return topk_idx, topk_weight
+
+
+# https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L476
+class DeepseekV3MoE(nn.Module):
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.tp_size = get_tensor_model_parallel_world_size()
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.n_shared_experts = config.n_shared_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.config = config
+        if self.tp_size > config.n_routed_experts:
+            raise ValueError(
+                f"Tensor parallel size {self.tp_size} is greater than "
+                f"the number of experts {config.n_routed_experts}.")
+
+        if config.hidden_act != "silu":
+            raise ValueError(f"Unsupported activation: {config.hidden_act}. "
+                             "Only silu is supported for now.")
+
+        self.gate = ReplicatedLinear(config.hidden_size,
+                                     config.n_routed_experts,
+                                     bias=False,
+                                     quant_config=None,
+                                     prefix=f"{prefix}.gate")
+        if config.topk_method == "noaux_tc":
+            self.gate.e_score_correction_bias = nn.Parameter(
+                torch.empty(config.n_routed_experts))
+        else:
+            self.gate.e_score_correction_bias = None
+
+        # self.experts = FusedMoE(
+        #     num_experts=config.n_routed_experts,
+        #     top_k=config.num_experts_per_tok,
+        #     hidden_size=config.hidden_size,
+        #     intermediate_size=config.moe_intermediate_size,
+        #     reduce_results=False,
+        #     renormalize=config.norm_topk_prob,
+        #     quant_config=quant_config,
+        #     use_grouped_topk=True,
+        #     num_expert_group=config.n_group,
+        #     topk_group=config.topk_group,
+        #     prefix=f"{prefix}.experts",
+        #     scoring_func=config.scoring_func,
+        #     e_score_correction_bias=self.gate.e_score_correction_bias)
+        self.ep_size = 1
+        self.experts_per_rank = config.n_routed_experts
+        self.ep_rank = 0
+        self.experts = nn.ModuleList(
+            [
+                DeepseekV3MLP(
+                    hidden_size=config.hidden_size,
+                    intermediate_size=config.moe_intermediate_size,
+                    hidden_act=config.hidden_act,
+                    quant_config=quant_config,
+                    reduce_results=False,
+                )
+                for i in range(config.n_routed_experts)
+            ]
+        )
+
+        if config.n_shared_experts is not None:
+            intermediate_size = (config.moe_intermediate_size *
+                                 config.n_shared_experts)
+            self.shared_experts = DeepseekV3MLP(
+                hidden_size=config.hidden_size,
+                intermediate_size=intermediate_size,
+                hidden_act=config.hidden_act,
+                quant_config=quant_config,
+                reduce_results=False,
+            )
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        orig_shape = hidden_states.shape
+        num_tokens = batch_size * seq_len
+        hidden_states = hidden_states.view(-1, hidden_dim)
+        if self.n_shared_experts is not None:
+            shared_output = self.shared_experts(hidden_states)
+        # router_logits: (num_tokens, n_experts)
+        router_logits, _ = self.gate(hidden_states)
+
+        topk_idx, topk_weight = moe_gate_naive(bsz=batch_size,
+                                               seq_len=seq_len,
+                                               logits=router_logits,
+                                               e_score_correction_bias=self.gate.e_score_correction_bias,
+                                               n_group=self.config.n_group,
+                                               topk_group=self.config.topk_group,
+                                               n_routed_experts=self.config.n_routed_experts,
+                                               top_k=self.config.num_experts_per_tok,
+                                               norm_topk_prob=self.config.norm_topk_prob,
+                                               routed_scaling_factor=self.routed_scaling_factor)
+        final_hidden_states = self.moe_infer(hidden_states, topk_idx, topk_weight)
+        print(f"final_hidden_states: {final_hidden_states.shape}")
+        print(f"shared_output: {shared_output.shape}")
+        if shared_output is not None:
+            final_hidden_states = final_hidden_states + shared_output
+        if self.tp_size > 1:
+            final_hidden_states = tensor_model_parallel_all_reduce(
+                final_hidden_states)
+
+        return final_hidden_states.view(batch_size, seq_len, hidden_dim)
+    
+    @torch.no_grad()
+    def moe_infer(self, x, topk_ids, topk_weight):
+        cnts = topk_ids.new_zeros((topk_ids.shape[0], len(self.experts)))
+        cnts.scatter_(1, topk_ids, 1)
+        tokens_per_expert = cnts.sum(dim=0)
+        idxs = topk_ids.view(-1).argsort()
+        sorted_tokens = x[idxs // topk_ids.shape[1]]
+        sorted_tokens_shape = sorted_tokens.shape
+        import habana_frameworks.torch.core as htcore
+        htcore.mark_step()
+        tokens_per_expert = tokens_per_expert.cpu().numpy()
+
+        outputs = []
+        start_idx = 0
+        for i, num_tokens in enumerate(tokens_per_expert):
+            end_idx = start_idx + num_tokens
+            if num_tokens == 0:
+                continue
+            expert = self.experts[i + self.ep_rank * self.experts_per_rank]
+            tokens_for_this_expert = sorted_tokens[start_idx:end_idx]
+            expert_out = expert(tokens_for_this_expert)
+            outputs.append(expert_out)
+            start_idx = end_idx
+
+        outs = torch.cat(outputs, dim=0) if len(outputs) else sorted_tokens.new_empty(0)
+
+        new_x = torch.empty_like(outs)
+        new_x[idxs] = outs
+        final_out = (
+            new_x.view(*topk_ids.shape, -1)
+            .type(topk_weight.dtype)
+            .mul_(topk_weight.unsqueeze(dim=-1))
+            .sum(dim=1)
+            .type(new_x.dtype)
+        )
+        return final_out
 
 
 def yarn_get_mscale(scale: float = 1, mscale: float = 1) -> float:

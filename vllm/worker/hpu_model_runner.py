@@ -705,6 +705,7 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
         with HabanaMemoryProfiler() as m:
             with HabanaMemoryProfiler() as m_getmodel:
                 self.model = get_model(vllm_config=self.vllm_config)
+                print("model", self.model)
             msg = ("Pre-loading model weights on "
                    f"{next(self.model.parameters()).device} "
                    f"took {m_getmodel.get_summary_string()}")

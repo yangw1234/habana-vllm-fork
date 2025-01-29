@@ -644,7 +644,7 @@ def initialize_dummy_weights(
                 param.uniform_(low, high)
                 continue
 
-            generator = torch.Generator(device=param.data.device)
+            generator = torch.Generator(device="cpu")
             generator.manual_seed(seed)
             if torch.finfo(param.data.dtype).bits < 16:
                 # uniform_ doesn't support < 16-bit datatypes (FP8)
