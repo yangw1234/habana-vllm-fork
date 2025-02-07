@@ -300,8 +300,11 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
             block2batch_matmul_op=self.block2batch_matmul,
             keys_fetch_func=self.latent_cache_k.fetch_from_cache,
             values_fetch_func=self.latent_cache_v.fetch_from_cache)
-        output = output.view(batch_size, 1, -1)
+        # print(output.shape)
         output = output[..., :self.kv_lora_rank]
+        print(f"output shape is {output.shape}")
+        print(f"batch size is {batch_size}")
+        # output = output.view(batch_size, 1, -1)
         result = self._v_up_proj_and_o_proj(output)
         result = result.view(batch_size, 1, -1)
         return result
