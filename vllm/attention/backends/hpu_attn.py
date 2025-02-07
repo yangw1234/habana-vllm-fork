@@ -288,7 +288,7 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
             keys_fetch_func=self.latent_cache_k.fetch_from_cache,
             values_fetch_func=self.latent_cache_k.fetch_from_cache)
 
-        output = output[..., :self.kv_lora_rank].contiguous()
+        # output = output[..., :self.kv_lora_rank]
         result = self._v_up_proj_and_o_proj(output)
         result = result.view(batch_size, 1, -1)
         return result

@@ -369,8 +369,11 @@ class MLACommonImpl(MLAAttentionImpl[T], Generic[T]):
 
             W_O = get_and_maybe_dequant_weights(self.o_proj)\
                 .view(-1, self.num_heads, self.v_head_dim)
-            W_UV_O = torch.einsum("lnd,hnd -> nlh", W_UV, W_O)\
-                .flatten(start_dim=0, end_dim=1).contiguous()
+            W_UV_O = torch.einsum("lnd,hnd -> nlh", W_UV, W_O)
+            # print("W_UV_O", W_UV_O.shape)
+            W_UV_O = torch.nn.functional.pad(
+                W_UV_O, [0,0, 0, 64, 0, 0], value=0)
+            W_UV_O = W_UV_O.flatten(start_dim=0, end_dim=1).contiguous()
 
             if is_fp8(weight_dtype) and requantization_enabled:
                 W_UV_O, W_UV_O_scales = scaled_quantize(
