@@ -571,7 +571,6 @@ class HPUCacheEngine(CacheEngine):
         if len(kv_cache_shape) == 2:
             use_mla = True
             k_cache_shape = kv_cache_shape[0]
-            v_cache_shape = kv_cache_shape[1]
         else:
             k_cache_shape = kv_cache_shape
             v_cache_shape = kv_cache_shape
@@ -582,10 +581,16 @@ class HPUCacheEngine(CacheEngine):
           and self.dtype == torch.float8_e4m3fn:
             dtype = torch.uint8
         for _ in range(self.num_attention_layers):
-            key_cache = torch.zeros(k_cache_shape, dtype=dtype, device=device)
-            value_cache = torch.zeros(v_cache_shape,
+            if use_mla:
+                key_cache = torch.zeros(k_cache_shape,
                                         dtype=dtype,
                                         device=device)
-            kv_layer = (key_cache, value_cache)
-            kv_cache.append(kv_layer)
+                kv_cache.append(key_cache)
+            else:
+                key_cache = torch.zeros(k_cache_shape, dtype=dtype, device=device)
+                value_cache = torch.zeros(v_cache_shape,
+                                            dtype=dtype,
+                                            device=device)
+                kv_layer = (key_cache, value_cache)
+                kv_cache.append(kv_layer)
         return kv_cache

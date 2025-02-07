@@ -75,7 +75,7 @@ class HPUMLAAttentionBackend(HPUAttentionBackend):
         num_kv_heads: int,
         head_size: int,
     ) -> Tuple[int, ...]:
-        return (num_blocks, block_size, head_size), (num_blocks, block_size, head_size//9*8)
+        return (num_blocks, block_size, head_size), True
     
     @staticmethod
     def get_impl_cls() -> Type["HPUAttentionImpl"]:
@@ -137,7 +137,6 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
         self.batch2block_matmul = Matmul()
         self.block2batch_matmul = Matmul()
         self.latent_cache_k = VLLMKVCache()
-        self.latent_cache_v = VLLMKVCache()
         HPUFusedSDPA = kernels.fsdpa()
         self.fused_scaled_dot_product_attention = None if HPUFusedSDPA is None \
             else ModuleFusedSDPA(HPUFusedSDPA)
@@ -163,7 +162,7 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
         hidden_states_or_q_c: torch.Tensor,  # query in unified attn
         k_c_normed: torch.Tensor,  # key in unified attn
         k_pe: torch.Tensor,  # value in unified attn
-        kv_cache: torch.Tensor,
+        latent_cache: torch.Tensor,
         attn_metadata: HPUAttentionMetadata,
         output: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -206,30 +205,18 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
                 (k_c_normed, k_pe.view(batch_size, -1, self.qk_rope_head_dim)), dim=-1)
         # assert layer._k_scale == 0, f"got _k_scale={layer._k_scale}"
         latent_vec_k = latent_vec_k.view(-1, self.qk_rope_head_dim + self.kv_lora_rank)
-        latent_vec_v = k_c_normed.view(-1, self.kv_lora_rank)
         if is_prefill:
             latent_vec_k = latent_vec_k.unflatten(0, (block_indices.size(0), -1))
-            latent_vec_v = latent_vec_v.unflatten(0, (block_indices.size(0), -1))
-        # print("latent_vec", latent_vec.shape)
-
 
         # write the latent and rope to kv cache
-        if kv_cache is not None and len(kv_cache) == 2:
-            # print(f"k cache shape: {kv_cache[0].shape}")
-            # print(f"v cache shape: {kv_cache[1].shape}")
-            # print(f"latent vec k shape: {latent_vec_k.shape}")
-            # print(f"latent vec v shape: {latent_vec_v.shape}")
+        if latent_cache is not None:
             
-            k_cache = self.latent_cache_k(latent_vec_k, kv_cache[0], block_indices,
+            latent_cache = self.latent_cache_k(latent_vec_k, latent_cache, block_indices,
                                         block_offsets)
-            v_cache = self.latent_cache_v(latent_vec_v, kv_cache[1], block_indices,
-                                        block_offsets)
-            kv_cache = (k_cache, v_cache)
-
         if is_prefill:
             return self._forward_prefill(q, k_c_normed, k_pe, attn_metadata, batch_size)
         else:
-            return self._forward_decode(q_nope, q_pe, kv_cache, attn_metadata, batch_size)
+            return self._forward_decode(q_nope, q_pe, latent_cache, attn_metadata, batch_size)
     
     def _forward_prefill(
         self,
@@ -276,12 +263,12 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
         self,
         q_nope: torch.Tensor,
         q_pe: torch.Tensor,
-        kv_cache: torch.Tensor,
+        latent_cache: torch.Tensor,
         attn_metadata: HPUAttentionMetadata,
         batch_size: int
     ) -> torch.Tensor:
         q = torch.cat([q_nope, q_pe], dim=-1)
-        kv_c_and_k_pe_cache = kv_cache[0].unsqueeze(2)
+        kv_c_and_k_pe_cache = latent_cache.unsqueeze(2)
         kv_c_cache = kv_c_and_k_pe_cache
 
         output = HPUPagedAttention.forward_decode(
@@ -299,12 +286,9 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
             batch2block_matmul_op=self.batch2block_matmul,
             block2batch_matmul_op=self.block2batch_matmul,
             keys_fetch_func=self.latent_cache_k.fetch_from_cache,
-            values_fetch_func=self.latent_cache_v.fetch_from_cache)
-        # print(output.shape)
-        output = output[..., :self.kv_lora_rank]
-        print(f"output shape is {output.shape}")
-        print(f"batch size is {batch_size}")
-        # output = output.view(batch_size, 1, -1)
+            values_fetch_func=self.latent_cache_k.fetch_from_cache)
+
+        output = output[..., :self.kv_lora_rank].contiguous()
         result = self._v_up_proj_and_o_proj(output)
         result = result.view(batch_size, 1, -1)
         return result
