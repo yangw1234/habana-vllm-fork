@@ -282,7 +282,7 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
     ) -> torch.Tensor:
         q = torch.cat([q_nope, q_pe], dim=-1)
         kv_c_and_k_pe_cache = kv_cache[0].unsqueeze(2)
-        kv_c_cache = kv_cache[1].unsqueeze(2)
+        kv_c_cache = kv_c_and_k_pe_cache
 
         output = HPUPagedAttention.forward_decode(
             query=q,
@@ -301,6 +301,7 @@ class HPUMLAImpl(MLACommonImpl[HPUAttentionMetadata]):
             keys_fetch_func=self.latent_cache_k.fetch_from_cache,
             values_fetch_func=self.latent_cache_v.fetch_from_cache)
         output = output.view(batch_size, 1, -1)
+        output = output[..., :self.kv_lora_rank]
         result = self._v_up_proj_and_o_proj(output)
         result = result.view(batch_size, 1, -1)
         return result
