@@ -196,11 +196,12 @@ class MultiStepWorker(ProposerWorkerBase, DelegateWorkerBase):
             List[SamplerOutput]: A list containing the filtered model 
             outputs for the specified indices.
         """
+        output_indices_to_retain_list = output_indices_to_retain.to('cpu').tolist()
         return [
             SamplerOutput(
                 outputs=[
                     expanded_batch_output.outputs[i]
-                    for i in output_indices_to_retain
+                    for i in output_indices_to_retain_list
                 ] if len(expanded_batch_output.outputs) > 0 else [],
                 sampled_token_probs=(
                     expanded_batch_output.
